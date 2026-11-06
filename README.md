@@ -8,6 +8,7 @@ A minimal, distraction-free study timer built with Flutter. Study days run from 
 
 - **Stopwatch** with start, pause, resume, and reset, plus live "today" total
 - **Sessions (laps)** sidebar with per-session times, delete, and longest/shortest highlighting
+- **Auto-session after a long pause** — pausing for 5+ minutes records the current session automatically, and resuming starts a fresh one
 - **6 AM study days** — daily totals, sessions, and charts roll over at 6 AM, not midnight
 - **Exam mode** — countdown timer (15/25/45/60/90/120 min) with auto-finish
 - **History** — today, this week, and last-30-days totals with interactive charts (hourly for today, 7/30-day trends)

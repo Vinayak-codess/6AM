@@ -1,5 +1,6 @@
 import 'dart:convert';
 
+import 'package:fake_async/fake_async.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:sixam/models/lap.dart';
 import 'package:sixam/services/storage.dart';
@@ -65,6 +66,116 @@ void main() {
       controller.start();
       clock.advance(const Duration(minutes: 1, milliseconds: 250));
       expect(controller.elapsed, const Duration(minutes: 1, milliseconds: 250));
+    });
+  });
+
+  group('auto lap after pause', () {
+    test(
+      'records the session once it has been paused for five minutes',
+      () async {
+        final data = AppData(InMemoryStorage());
+        await data.load();
+
+        fakeAsync((async) {
+          final start = DateTime(2026, 10, 14, 10);
+          final controller = StopwatchController(
+            data,
+            clock: () => start.add(async.elapsed),
+            tickInterval: null,
+            autoSaveInterval: null,
+          );
+
+          controller.start();
+          async.elapse(const Duration(minutes: 2));
+          controller.pause();
+
+          async.elapse(const Duration(minutes: 4, seconds: 59));
+          expect(controller.laps, isEmpty);
+
+          async.elapse(const Duration(seconds: 1));
+          expect(controller.laps, hasLength(1));
+          expect(controller.laps.single.duration, const Duration(minutes: 2));
+          expect(controller.lapElapsed, Duration.zero);
+          expect(controller.elapsed, const Duration(minutes: 2));
+          expect(controller.isRunning, isFalse);
+          expect(
+            data.totalForStudyDay(DateTime(2026, 10, 14)),
+            const Duration(minutes: 2),
+          );
+
+          controller.dispose();
+        });
+      },
+    );
+
+    test('does not lap when resumed before five minutes', () async {
+      final data = AppData(InMemoryStorage());
+      await data.load();
+
+      fakeAsync((async) {
+        final start = DateTime(2026, 10, 14, 10);
+        final controller = StopwatchController(
+          data,
+          clock: () => start.add(async.elapsed),
+          tickInterval: null,
+          autoSaveInterval: null,
+        );
+
+        controller.start();
+        async.elapse(const Duration(minutes: 2));
+        controller.pause();
+        async.elapse(const Duration(minutes: 4));
+        controller.start();
+
+        expect(controller.laps, isEmpty);
+        expect(controller.isRunning, isTrue);
+        expect(controller.elapsed, const Duration(minutes: 2));
+
+        controller.dispose();
+      });
+    });
+
+    test('laps a long-paused session when it is resumed', () async {
+      final (controller, _, clock) = await build();
+
+      controller.start();
+      clock.advance(const Duration(minutes: 2));
+      controller.pause();
+      clock.advance(const Duration(minutes: 6));
+      controller.start();
+
+      expect(controller.laps, hasLength(1));
+      expect(controller.laps.single.duration, const Duration(minutes: 2));
+      expect(controller.lapElapsed, Duration.zero);
+      expect(controller.isRunning, isTrue);
+
+      clock.advance(const Duration(minutes: 1));
+      controller.lap();
+      expect(controller.laps.last.start, DateTime(2026, 10, 14, 10, 8));
+      expect(controller.laps.last.duration, const Duration(minutes: 1));
+    });
+
+    test('restores a paused session and laps it after five minutes', () async {
+      final storage = InMemoryStorage();
+      final (controller, data, clock) = await build(storage: storage);
+      controller.start();
+      clock.advance(const Duration(minutes: 2));
+      controller.pause();
+      await data.flush();
+
+      final (restored, restoredData, _) = await build(
+        storage: storage,
+        start: DateTime(2026, 10, 14, 10, 10),
+      );
+
+      expect(restored.laps, hasLength(1));
+      expect(restored.laps.single.duration, const Duration(minutes: 2));
+      expect(restored.lapElapsed, Duration.zero);
+      expect(restored.elapsed, const Duration(minutes: 2));
+      expect(
+        restoredData.totalForStudyDay(DateTime(2026, 10, 14)),
+        const Duration(minutes: 2),
+      );
     });
   });
 
@@ -273,13 +384,20 @@ void main() {
         storage: storage,
         start: DateTime(2026, 10, 14, 10, 10),
       );
+      // The app was paused for more than five minutes, so restoring it
+      // automatically records the previous session before the next one starts.
+      expect(restored.laps, hasLength(2));
+      expect(restored.laps[0].duration, const Duration(seconds: 5));
+      expect(restored.laps[1].duration, const Duration(seconds: 3));
+
       restored.start();
       restoredClock.advance(const Duration(seconds: 2));
       restored.lap();
 
-      expect(restored.laps, hasLength(2));
+      expect(restored.laps, hasLength(3));
       expect(restored.laps[0].duration, const Duration(seconds: 5));
-      expect(restored.laps[1].duration, const Duration(seconds: 5));
+      expect(restored.laps[1].duration, const Duration(seconds: 3));
+      expect(restored.laps[2].duration, const Duration(seconds: 2));
     });
   });
 

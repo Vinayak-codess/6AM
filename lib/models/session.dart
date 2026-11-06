@@ -5,6 +5,7 @@ class Session {
     this.laps = const [],
     this.accumulated = Duration.zero,
     this.runningSince,
+    this.pausedAt,
     this.lastLapElapsed,
     this.lastLapEnd,
   });
@@ -12,6 +13,7 @@ class Session {
   final List<Lap> laps;
   final Duration accumulated;
   final DateTime? runningSince;
+  final DateTime? pausedAt;
   final Duration? lastLapElapsed;
   final DateTime? lastLapEnd;
 
@@ -42,6 +44,7 @@ class Session {
     'laps': [for (final lap in laps) lap.toJson()],
     'accumulatedMs': accumulated.inMilliseconds,
     'runningSince': runningSince?.toIso8601String(),
+    'pausedAt': pausedAt?.toIso8601String(),
     'lastLapElapsedMs': lastLapElapsed?.inMilliseconds,
     'lastLapEnd': lastLapEnd?.toIso8601String(),
   };
@@ -49,6 +52,7 @@ class Session {
   factory Session.fromJson(Map<String, Object?> json) {
     final rawLaps = json['laps'];
     final rawRunningSince = json['runningSince'];
+    final rawPausedAt = json['pausedAt'];
     final rawLastLapElapsed = json['lastLapElapsedMs'];
     final rawLastLapEnd = json['lastLapEnd'];
     return Session(
@@ -64,10 +68,13 @@ class Session {
       runningSince: rawRunningSince is String
           ? DateTime.parse(rawRunningSince)
           : null,
+      pausedAt: rawPausedAt is String ? DateTime.parse(rawPausedAt) : null,
       lastLapElapsed: rawLastLapElapsed is num
           ? Duration(milliseconds: rawLastLapElapsed.toInt())
           : null,
-      lastLapEnd: rawLastLapEnd is String ? DateTime.parse(rawLastLapEnd) : null,
+      lastLapEnd: rawLastLapEnd is String
+          ? DateTime.parse(rawLastLapEnd)
+          : null,
     );
   }
 }

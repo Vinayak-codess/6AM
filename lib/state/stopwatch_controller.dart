@@ -15,6 +15,7 @@ class StopwatchController extends ChangeNotifier {
     DateTime Function()? clock,
     this.tickInterval = const Duration(milliseconds: 40),
     this.autoSaveInterval = const Duration(seconds: 5),
+    this.autoLapAfterPause = const Duration(minutes: 5),
   }) : _clock = clock ?? DateTime.now {
     _restore(_data.session);
     _scheduleRolloverCheck();
@@ -24,6 +25,7 @@ class StopwatchController extends ChangeNotifier {
   final DateTime Function() _clock;
   final Duration? tickInterval;
   final Duration? autoSaveInterval;
+  final Duration autoLapAfterPause;
 
   final List<Lap> _laps = <Lap>[];
   Duration _accumulated = Duration.zero;
@@ -34,6 +36,7 @@ class StopwatchController extends ChangeNotifier {
   DateTime _sessionDay = DateTime(1970);
   Timer? _ticker;
   Timer? _autoSaveTimer;
+  Timer? _autoLapTimer;
   Timer? _rolloverTimer;
 
   TimerMode _mode = TimerMode.stopwatch;
@@ -213,10 +216,16 @@ class StopwatchController extends ChangeNotifier {
     if (isExam && _examCompleted) {
       return;
     }
-    _checkDayRollover();
+    _cancelAutoLapTimer();
     final now = _clock();
+    _autoLapIfPauseExpired(now);
+    _checkDayRollover();
     if (_accumulated == Duration.zero && _laps.isEmpty) {
       _lastLapElapsed = Duration.zero;
+      _lastLapEnd = now;
+    } else if (_accumulated == _lastLapElapsed) {
+      // The previous session was already recorded (for example by the
+      // automatic lap), so the next session starts when the timer resumes.
       _lastLapEnd = now;
     }
     _runningSince = now;
@@ -255,10 +264,12 @@ class StopwatchController extends ChangeNotifier {
     }
     _persist();
     _stopTimers();
+    _scheduleAutoLapTimer();
     notifyListeners();
   }
 
   Lap? lap() {
+    _cancelAutoLapTimer();
     final now = _clock();
     final since = _runningSince;
     if (since != null) {
@@ -354,6 +365,7 @@ class StopwatchController extends ChangeNotifier {
   }
 
   void _clearTimerSession() {
+    _cancelAutoLapTimer();
     _runningSince = null;
     _pausedAt = null;
     _laps.clear();
@@ -374,13 +386,22 @@ class StopwatchController extends ChangeNotifier {
       ..addAll(session.laps);
     _accumulated = session.accumulated;
     _runningSince = session.runningSince;
+    _pausedAt = _runningSince == null ? session.pausedAt : null;
     _lastLapElapsed =
         session.lastLapElapsed ??
         _laps.fold(Duration.zero, (sum, lap) => sum + lap.duration);
     _lastLapEnd = session.lastLapEnd ?? (_laps.isEmpty ? null : _laps.last.end);
     _sessionDay = _sessionDayFor(session);
+    if (!isRunning && _pausedAt == null && _accumulated > _lastLapElapsed) {
+      // Sessions saved before pause timestamps were stored start their
+      // five-minute window when the app reopens.
+      _pausedAt = _clock();
+      _persist();
+    }
+    _autoLapIfPauseExpired(_clock());
     _splitStaleLaps();
     _checkDayRollover();
+    _scheduleAutoLapTimer();
     if (isRunning) {
       _startTimers();
     }
@@ -390,6 +411,10 @@ class StopwatchController extends ChangeNotifier {
     final since = session.runningSince;
     if (since != null) {
       return studyDayFor(since);
+    }
+    final pausedAt = session.pausedAt;
+    if (pausedAt != null) {
+      return studyDayFor(pausedAt);
     }
     if (session.laps.isNotEmpty) {
       return studyDayFor(session.laps.last.end);
@@ -427,6 +452,7 @@ class StopwatchController extends ChangeNotifier {
   }
 
   void _rollOverDay(DateTime today) {
+    _cancelAutoLapTimer();
     final now = _clock();
     final since = _runningSince;
     final wasRunning = since != null;
@@ -442,6 +468,7 @@ class StopwatchController extends ChangeNotifier {
     _lastLapElapsed = Duration.zero;
     _lastLapEnd = wasRunning ? now : null;
     _runningSince = wasRunning ? now : null;
+    _pausedAt = null;
     _sessionDay = today;
     _persist();
     _scheduleRolloverCheck();
@@ -466,10 +493,62 @@ class StopwatchController extends ChangeNotifier {
         laps: List<Lap>.of(_laps),
         accumulated: _accumulated,
         runningSince: _runningSince,
+        pausedAt: _pausedAt,
         lastLapElapsed: _lastLapElapsed,
         lastLapEnd: _lastLapEnd,
       ),
     );
+  }
+
+  void _scheduleAutoLapTimer() {
+    _cancelAutoLapTimer();
+    final threshold = autoLapAfterPause;
+    final pausedAt = _pausedAt;
+    if (threshold <= Duration.zero || pausedAt == null || isRunning) {
+      return;
+    }
+    if (_accumulated <= _lastLapElapsed) {
+      return;
+    }
+    final remaining = threshold - _clock().difference(pausedAt);
+    _autoLapTimer = Timer(
+      remaining.isNegative ? Duration.zero : remaining,
+      _onAutoLapTimer,
+    );
+  }
+
+  void _onAutoLapTimer() {
+    _autoLapTimer = null;
+    if (isRunning) {
+      return;
+    }
+    final now = _clock();
+    if (!_pauseExpired(now)) {
+      _scheduleAutoLapTimer();
+      return;
+    }
+    _autoLapIfPauseExpired(now);
+  }
+
+  bool _pauseExpired(DateTime now) {
+    final threshold = autoLapAfterPause;
+    final pausedAt = _pausedAt;
+    if (threshold <= Duration.zero || pausedAt == null || isRunning) {
+      return false;
+    }
+    return now.difference(pausedAt) >= threshold;
+  }
+
+  bool _autoLapIfPauseExpired(DateTime now) {
+    if (!_pauseExpired(now) || _accumulated <= _lastLapElapsed) {
+      return false;
+    }
+    return lap() != null;
+  }
+
+  void _cancelAutoLapTimer() {
+    _autoLapTimer?.cancel();
+    _autoLapTimer = null;
   }
 
   void _scheduleRolloverCheck() {
@@ -516,6 +595,7 @@ class StopwatchController extends ChangeNotifier {
   @override
   void dispose() {
     _stopTimers();
+    _cancelAutoLapTimer();
     _rolloverTimer?.cancel();
     _rolloverTimer = null;
     super.dispose();
